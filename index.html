@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Food Ordering Bot</title>
+    <script src="https://unpkg.com/@daily-co/daily-js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+        }
+
+        .controls {
+            margin: 20px 0;
+        }
+
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+
+        button:hover {
+            background: #0056b3;
+        }
+
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+
+        .status {
+            margin: 20px 0;
+            padding: 10px;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .status.connecting {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+
+        .room-input {
+            margin: 20px 0;
+        }
+
+        input {
+            padding: 10px;
+            width: 300px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 16px;
+        }
+
+        .instructions {
+            text-align: left;
+            background: #e9ecef;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+
+        .instructions h3 {
+            margin-top: 0;
+            color: #495057;
+        }
+
+        .instructions ul {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+
+        .instructions li {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🍕 Food Ordering Bot</h1>
+        <p class="subtitle">Order pizza or sushi using voice commands</p>
+
+        <div class="room-input">
+            <input type="text" id="roomUrl" placeholder="Enter Daily room URL" />
+        </div>
+
+        <div class="controls">
+            <button id="joinBtn" onclick="joinCall()">Join Call</button>
+            <button id="leaveBtn" onclick="leaveCall()" disabled>Leave Call</button>
+            <button id="muteBtn" onclick="toggleMute()" disabled>Mute</button>
+            <button id="testAudioBtn" onclick="testAudio()" disabled>Test Audio</button>
+        </div>
+
+        <div id="status" class="status disconnected">Disconnected</div>
+
+        <div class="instructions">
+            <h3>How to use:</h3>
+            <ul>
+                <li>First, run the food ordering bot Python script</li>
+                <li>Copy the room URL from the bot's output</li>
+                <li>Paste the room URL above and click "Join Call"</li>
+                <li>Once connected, speak to place your order</li>
+                <li>You can order pizza or sushi - just follow the bot's prompts</li>
+            </ul>
+
+            <h3>Voice Commands:</h3>
+            <ul>
+                <li>"I want pizza" or "I'll take pizza"</li>
+                <li>"I want sushi" or "I'll have sushi"</li>
+                <li>Follow the bot's prompts for size, type, and confirmation</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        let call = null;
+        let isMuted = false;
+
+        async function joinCall() {
+            const roomUrl = document.getElementById('roomUrl').value.trim();
+
+            if (!roomUrl) {
+                alert('Please enter a room URL');
+                return;
+            }
+
+            try {
+                updateStatus('Connecting...', 'connecting');
+                document.getElementById('joinBtn').disabled = true;
+
+                // Create Daily call instance
+                call = DailyIframe.createCallObject();
+
+                // Set up event listeners
+                call.on('joined-meeting', () => {
+                    console.log('Joined meeting');
+                    updateStatus('Connected - Speak to place your order!', 'connected');
+                    document.getElementById('leaveBtn').disabled = false;
+                    document.getElementById('muteBtn').disabled = false;
+                    document.getElementById('testAudioBtn').disabled = false;
+                });
+
+                call.on('left-meeting', () => {
+                    console.log('Left meeting');
+                    updateStatus('Disconnected', 'disconnected');
+                    document.getElementById('joinBtn').disabled = false;
+                    document.getElementById('leaveBtn').disabled = true;
+                    document.getElementById('muteBtn').disabled = true;
+                    document.getElementById('muteBtn').textContent = 'Mute';
+                    document.getElementById('testAudioBtn').disabled = true;
+                    isMuted = false;
+
+                    // Clean up any audio elements
+                    document.querySelectorAll('audio[id^="audio-"]').forEach(audio => {
+                        audio.srcObject = null;
+                        audio.remove();
+                    });
+                });
+
+                call.on('error', (error) => {
+                    console.error('Call error:', error);
+                    updateStatus('Error: ' + error.errorMsg, 'disconnected');
+                    document.getElementById('joinBtn').disabled = false;
+                });
+
+                call.on('participant-joined', (event) => {
+                    console.log('Participant joined:', event.participant);
+                });
+
+                call.on('participant-left', (event) => {
+                    console.log('Participant left:', event.participant);
+                });
+
+                call.on('track-started', (event) => {
+                    console.log('Track started:', event);
+                    if (event.track.kind === 'audio' && !event.participant.local) {
+                        const participantId = event.participant.session_id;
+                        // Remove existing audio element if any
+                        const existingAudio = document.getElementById(`audio-${participantId}`);
+                        if (existingAudio) {
+                            existingAudio.remove();
+                        }
+                        // Create new audio element
+                        const audioElement = document.createElement('audio');
+                        audioElement.id = `audio-${participantId}`;
+                        audioElement.autoplay = true;
+                        audioElement.srcObject = new MediaStream([event.track]);
+                        document.body.appendChild(audioElement);
+                        console.log('Created audio element for remote participant:', participantId);
+                    }
+                });
+
+                call.on('track-stopped', (event) => {
+                    console.log('Track stopped:', event);
+                    if (event.track.kind === 'audio' && !event.participant.local) {
+                        const participantId = event.participant.session_id;
+                        const audioElement = document.getElementById(`audio-${participantId}`);
+                        if (audioElement) {
+                            audioElement.srcObject = null;
+                            audioElement.remove();
+                            console.log('Removed audio element for remote participant:', participantId);
+                        }
+                    }
+                });
+
+                // Join the call with audio only
+                await call.join({
+                    url: roomUrl,
+                    videoSource: false, // No video
+                    audioSource: true,  // Enable audio input
+                    startAudioOff: false, // Start with audio on
+                    startVideoOff: true   // Ensure video is off
+                });
+
+            } catch (error) {
+                console.error('Failed to join call:', error);
+                updateStatus('Failed to connect: ' + error.message, 'disconnected');
+                document.getElementById('joinBtn').disabled = false;
+            }
+        }
+
+        async function leaveCall() {
+            if (call) {
+                try {
+                    await call.leave();
+                    call.destroy();
+                    call = null;
+                } catch (error) {
+                    console.error('Error leaving call:', error);
+                }
+            }
+        }
+
+        async function toggleMute() {
+            if (!call) return;
+
+            try {
+                if (isMuted) {
+                    await call.setLocalAudio(true);
+                    document.getElementById('muteBtn').textContent = 'Mute';
+                    isMuted = false;
+                    console.log('Unmuted');
+                } else {
+                    await call.setLocalAudio(false);
+                    document.getElementById('muteBtn').textContent = 'Unmute';
+                    isMuted = true;
+                    console.log('Muted');
+                }
+            } catch (error) {
+                console.error('Error toggling mute:', error);
+            }
+        }
+
+        async function testAudio() {
+            if (!call) return;
+
+            try {
+                // Check audio permissions
+                const permissions = await navigator.permissions.query({ name: 'microphone' });
+                console.log('Microphone permission:', permissions.state);
+
+                // Get available audio devices
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const audioOutputs = devices.filter(device => device.kind === 'audiooutput');
+                const audioInputs = devices.filter(device => device.kind === 'audioinput');
+
+                console.log('Audio output devices:', audioOutputs);
+                console.log('Audio input devices:', audioInputs);
+
+                // Check current call state
+                const participants = call.participants();
+                console.log('Participants:', participants);
+
+                // Check if we can hear remote audio
+                const meetingState = call.meetingState();
+                console.log('Meeting state:', meetingState);
+
+                alert(`Audio Test Results:
+                - Microphone permission: ${permissions.state}
+                - Audio outputs available: ${audioOutputs.length}
+                - Audio inputs available: ${audioInputs.length}
+                - Participants: ${Object.keys(participants).length}
+                - Meeting state: ${meetingState}
+                
+                Check browser console for detailed logs.`);
+
+            } catch (error) {
+                console.error('Error testing audio:', error);
+                alert('Error testing audio: ' + error.message);
+            }
+        }
+
+
+
+        function updateStatus(message, type) {
+            const statusEl = document.getElementById('status');
+            statusEl.textContent = message;
+            statusEl.className = `status ${type}`;
+        }
+
+        // Handle page unload
+        window.addEventListener('beforeunload', () => {
+            if (call) {
+                call.leave();
+                call.destroy();
+            }
+        });
+
+        // Auto-focus room URL input
+        document.getElementById('roomUrl').focus();
+    </script>
+</body>
+
+</html>
