@@ -7,9 +7,11 @@
 import asyncio
 import os
 import sys
+import signal
 from pathlib import Path
 
 import aiohttp
+import httpx
 from dotenv import load_dotenv
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
@@ -31,6 +33,68 @@ load_dotenv(override=True)
 
 logger.remove(0)
 logger.add(sys.stderr, level="DEBUG")
+
+# Global variables to store room URL and process info
+room_url: str | None = None
+current_process_pid: int | None = None
+
+
+async def delete_room(room_url: str | None):
+    """Delete the Daily room via API"""
+    try:
+        if not room_url:
+            logger.error("No room URL provided for deletion")
+            return
+
+        token = os.getenv("DAILY_API_KEY")
+        if not token:
+            logger.error("DAILY_API_KEY environment variable not set")
+            return
+
+        # Extract room name from URL (e.g., "https://your-domain.daily.co/room-name" -> "room-name")
+        room_name = room_url.split("/")[-1]
+
+        url = f"https://api.daily.co/v1/rooms/{room_name}"
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(url, headers=headers)
+            if response.status_code == 200:
+                logger.info(f"Successfully deleted room: {room_name}")
+            else:
+                logger.error(
+                    f"Failed to delete room {room_name}: {response.status_code} - {response.text}"
+                )
+    except Exception as e:
+        logger.error(f"Error deleting room: {e}")
+
+
+def kill_current_process():
+    """Kill the current process"""
+    try:
+        logger.info(f"Terminating process with PID: {os.getpid()}")
+        os.kill(os.getpid(), signal.SIGTERM)
+    except Exception as e:
+        logger.error(f"Error killing process: {e}")
+        # Fallback to sys.exit
+        sys.exit(0)
+
+
+def signal_handler(signum, frame):
+    """Handle termination signals gracefully"""
+    logger.info(f"Received signal {signum}, cleaning up...")
+    if room_url:
+        asyncio.create_task(delete_room(room_url))
+    sys.exit(0)
+
+
+# Register signal handlers
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
+
 
 # Flow Configuration - Food ordering
 #
@@ -99,7 +163,7 @@ async def select_pizza_order(args: FlowArgs) -> tuple[PizzaOrderResult, str]:
     base_price = {"small": 10.00, "medium": 15.00, "large": 20.00}
     price = base_price[size]
 
-    result = {"size": size, "type": pizza_type, "price": price}
+    result = PizzaOrderResult(size=size, type=pizza_type, price=price)
     return result, "confirm"
 
 
@@ -111,7 +175,7 @@ async def select_sushi_order(args: FlowArgs) -> tuple[SushiOrderResult, str]:
     # Simple pricing: $8 per roll
     price = count * 8.00
 
-    result = {"count": count, "type": roll_type, "price": price}
+    result = SushiOrderResult(count=count, type=roll_type, price=price)
     return result, "confirm"
 
 
@@ -310,6 +374,7 @@ Be friendly and clear when reading back the order details.""",
                     "content": "Thank the user for their order and end the conversation politely and concisely.",
                 }
             ],
+            "functions": [],
             "post_actions": [{"type": "end_conversation"}],
         },
     },
@@ -318,8 +383,15 @@ Be friendly and clear when reading back the order details.""",
 
 async def main():
     """Main function to set up and run the food ordering bot."""
+    global room_url
+
     async with aiohttp.ClientSession() as session:
         (room_url, _) = await configure(session)
+
+        # Ensure room_url is not None
+        if not room_url:
+            logger.error("Failed to get room URL from configuration")
+            return
 
         # Initialize services
         transport = DailyTransport(
@@ -333,12 +405,14 @@ async def main():
             ),
         )
 
-        stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY"))
+        stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY") or "")
         tts = ElevenLabsTTSService(
-            api_key=os.getenv("ELEVENLABS_API_KEY"),
+            api_key=os.getenv("ELEVENLABS_API_KEY") or "",
             voice_id="EXAVITQu4vr4xnSDxMaL",  # Bella - Female conversational voice
         )
-        llm = OpenAILLMService(api_key=os.getenv("OPENAI_API_KEY"), model="gpt-4o")
+        llm = OpenAILLMService(
+            api_key=os.getenv("OPENAI_API_KEY") or "", model="gpt-4o"
+        )
 
         context = OpenAILLMContext()
         context_aggregator = llm.create_context_aggregator(context)
@@ -371,6 +445,26 @@ async def main():
             await transport.capture_participant_transcription(participant["id"])
             logger.debug("Initializing flow")
             await flow_manager.initialize()
+
+        @transport.event_handler("on_participant_left")
+        async def on_participant_left(transport, participant, *args):
+            logger.info(f"Participant left: {participant['id']}")
+            logger.info("Deleting room and terminating process...")
+
+            try:
+                # Delete the room
+                await delete_room(room_url)
+                logger.info("Room deletion completed")
+            except Exception as e:
+                logger.error(f"Error during room deletion: {e}")
+
+            try:
+                # Kill the current process
+                kill_current_process()
+            except Exception as e:
+                logger.error(f"Error killing process: {e}")
+                # Force exit as fallback
+                sys.exit(0)
 
         runner = PipelineRunner()
         await runner.run(task)

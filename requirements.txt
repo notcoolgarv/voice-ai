@@ -2,3 +2,4 @@ pipecat-ai[daily,openai,deepgram,elevenlabs]
 pipecat-ai-flows
 python-dotenv
 onnxruntime
+fastapi[standard]
