@@ -1,4 +1,6 @@
 from fastapi import FastAPI, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import httpx
 import os
 import asyncio
@@ -14,21 +16,44 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
+# Add CORS middleware to allow all origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
+
 # Global dictionary to track background processes
 background_processes = {}
 
+# Voice mapping
+VOICE_MAPPING = {
+    "female": "OYTbf65OHHFELVut7v2H",  # Hope
+    "male": "pwMBn0SsmN1220Aorv15",  # Matt
+}
 
-async def start_main_py_background(room_url: str):
-    """Background task to start main.py with the room URL"""
+
+class CreateRoomRequest(BaseModel):
+    voice: str = "female"  # Default to female voice
+
+
+async def start_main_py_background(room_url: str, voice: str):
+    """Background task to start main.py with the room URL and voice"""
     try:
         # Get the directory where main.py is located
         main_py_path = Path(__file__).parent / "main.py"
 
-        logger.info(f"Starting main.py background process with room URL: {room_url}")
+        logger.info(
+            f"Starting main.py background process with room URL: {room_url} and voice: {voice}"
+        )
 
-        # Start main.py as a subprocess with the room URL
+        # Start main.py as a subprocess with the room URL and voice
         # Remove stdout and stderr pipes to see logs in real-time
-        process = subprocess.Popen([sys.executable, str(main_py_path), "-u", room_url])
+        process = subprocess.Popen(
+            [sys.executable, str(main_py_path), "-u", room_url, "--voice", voice]
+        )
 
         logger.info(f"Started main.py background process with PID: {process.pid}")
 
@@ -64,10 +89,16 @@ async def root():
 
 
 @app.post("/create-room")
-async def create_meeting_room(background_tasks: BackgroundTasks):
+async def create_meeting_room(
+    request: CreateRoomRequest, background_tasks: BackgroundTasks
+):
     token = os.getenv("DAILY_API_KEY")
     if not token:
         return {"error": "DAILY_API_KEY environment variable not set"}
+
+    # Validate voice parameter
+    if request.voice not in VOICE_MAPPING:
+        return {"error": f"Invalid voice. Must be one of: {list(VOICE_MAPPING.keys())}"}
 
     url = "https://api.daily.co/v1/rooms"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -94,11 +125,13 @@ async def create_meeting_room(background_tasks: BackgroundTasks):
         # If room creation was successful, start the background task
         if response.status_code == 200 and "url" in result:
             room_url = result["url"]
-            background_tasks.add_task(start_main_py_background, room_url)
+            background_tasks.add_task(start_main_py_background, room_url, request.voice)
             result["background_task_started"] = True
             result["message"] = "Room created and main.py background task started"
             result["expires_in_seconds"] = 300
             result["expires_at"] = expiry_time
+            result["voice"] = request.voice
+            result["voice_id"] = VOICE_MAPPING[request.voice]
 
         return result
 
