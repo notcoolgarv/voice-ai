@@ -14,6 +14,8 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
 from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.processors.user_idle_processor import UserIdleProcessor
+from pipecat.frames.frames import EndFrame, LLMMessagesFrame, TTSSpeakFrame
 from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService
@@ -383,10 +385,42 @@ async def main():
         context = OpenAILLMContext()
         context_aggregator = llm.create_context_aggregator(context)
 
+        async def handle_user_idle(
+            user_idle: UserIdleProcessor, retry_count: int
+        ) -> bool:
+            if retry_count == 1:
+                # First attempt: Add a gentle prompt to the conversation
+                await user_idle.push_frame(
+                    TTSSpeakFrame(
+                        "Are you still there? I'm here if you have any questions about Halsell."
+                    )
+                )
+                return True
+            elif retry_count == 2:
+                # Second attempt: More direct prompt
+                await user_idle.push_frame(
+                    TTSSpeakFrame(
+                        "I notice you've been quiet. Would you like to continue our conversation about Halsell?"
+                    )
+                )
+                return True
+            else:
+                # Third attempt: End the conversation
+                await user_idle.push_frame(
+                    TTSSpeakFrame(
+                        "It seems like you're busy right now. Feel free to reach out to us at sales@halsell.com when you're ready to learn more about Halsell. Have a great day!"
+                    )
+                )
+                await task.queue_frame(EndFrame())
+                return False
+
+        user_idle = UserIdleProcessor(callback=handle_user_idle, timeout=5.0)
+
         pipeline = Pipeline(
             [
                 transport.input(),
                 stt,
+                user_idle,
                 context_aggregator.user(),
                 llm,
                 tts,
