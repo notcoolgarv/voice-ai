@@ -1,5 +1,6 @@
 from fastapi import FastAPI, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import httpx
 import os
@@ -9,6 +10,10 @@ import sys
 import time
 from pathlib import Path
 import logging
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -28,31 +33,33 @@ app.add_middleware(
 # Global dictionary to track background processes
 background_processes = {}
 
-# Voice mapping
-VOICE_MAPPING = {
-    "female": "OYTbf65OHHFELVut7v2H",  # Hope
-    "male": "pwMBn0SsmN1220Aorv15",  # Matt
-}
+# Default voice - Hope (popular ElevenLabs voice)
+DEFAULT_VOICE_ID = "OYTbf65OHHFELVut7v2H"
+DEFAULT_AI_NAME = "Pizza ordering AI"
 
 
 class CreateRoomRequest(BaseModel):
-    voice: str = "female"  # Default to female voice
+    pass
 
 
-async def start_main_py_background(room_url: str, voice: str):
-    """Background task to start main.py with the room URL and voice"""
+class JoinRoomRequest(BaseModel):
+    room_name: str
+
+
+async def start_main_py_background(room_url: str):
+    """Background task to start main.py with the room URL"""
     try:
         # Get the directory where main.py is located
-        main_py_path = Path(__file__).parent / "main.py"
+        main_py_path = Path(__file__).parent.parent / "bot" / "main.py"
 
         logger.info(
-            f"Starting main.py background process with room URL: {room_url} and voice: {voice}"
+            f"Starting main.py background process with room URL: {room_url}"
         )
 
-        # Start main.py as a subprocess with the room URL and voice
+        # Start main.py as a subprocess with the room URL
         # Remove stdout and stderr pipes to see logs in real-time
         process = subprocess.Popen(
-            [sys.executable, str(main_py_path), "-u", room_url, "--voice", voice]
+            [sys.executable, str(main_py_path), "-u", room_url]
         )
 
         logger.info(f"Started main.py background process with PID: {process.pid}")
@@ -85,20 +92,26 @@ async def cleanup_background_process(room_url: str):
 
 @app.get("/")
 async def root():
-    return {"message": "Hello World"}
+    """Serve the index.html file"""
+    index_path = Path(__file__).parent.parent.parent / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    return {"message": "Hello World - index.html not found"}
+
+
+@app.get("/api")
+async def api_root():
+    return {"message": "API is running"}
 
 
 @app.post("/create-room")
 async def create_meeting_room(
     request: CreateRoomRequest, background_tasks: BackgroundTasks
 ):
+    """Legacy endpoint - creates a room with random name"""
     token = os.getenv("DAILY_API_KEY")
     if not token:
         return {"error": "DAILY_API_KEY environment variable not set"}
-
-    # Validate voice parameter
-    if request.voice not in VOICE_MAPPING:
-        return {"error": f"Invalid voice. Must be one of: {list(VOICE_MAPPING.keys())}"}
 
     url = "https://api.daily.co/v1/rooms"
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -125,13 +138,74 @@ async def create_meeting_room(
         # If room creation was successful, start the background task
         if response.status_code == 200 and "url" in result:
             room_url = result["url"]
-            background_tasks.add_task(start_main_py_background, room_url, request.voice)
+            background_tasks.add_task(start_main_py_background, room_url)
             result["background_task_started"] = True
             result["message"] = "Room created and main.py background task started"
             result["expires_in_seconds"] = 300
             result["expires_at"] = expiry_time
-            result["voice"] = request.voice
-            result["voice_id"] = VOICE_MAPPING[request.voice]
+            result["voice_id"] = DEFAULT_VOICE_ID
+            result["ai_name"] = DEFAULT_AI_NAME
+
+        return result
+
+
+@app.post("/join-room")
+async def join_room(request: JoinRoomRequest, background_tasks: BackgroundTasks):
+    """Create or get a room with the specified name and start the bot"""
+    token = os.getenv("DAILY_API_KEY")
+    if not token:
+        return {"error": "DAILY_API_KEY environment variable not set"}
+
+    url = "https://api.daily.co/v1/rooms"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    # Set room to expire in 5 minutes (300 seconds)
+    expiry_time = int(time.time()) + 300
+
+    # Room configuration with specific name and expiration
+    room_config = {
+        "name": request.room_name,
+        "properties": {
+            "exp": expiry_time,
+            "enable_chat": True,
+            "enable_knocking": False,
+            "enable_screenshare": False,
+            "enable_recording": False,
+            "max_participants": 10,
+        },
+    }
+
+    async with httpx.AsyncClient() as client:
+        response = await client.post(url, headers=headers, json=room_config)
+        result = response.json()
+
+        # If room already exists, that's fine, get the room info
+        if response.status_code == 400 and "already exists" in str(result):
+            # Get the existing room
+            get_url = f"https://api.daily.co/v1/rooms/{request.room_name}"
+            get_response = await client.get(get_url, headers=headers)
+            if get_response.status_code == 200:
+                result = get_response.json()
+                room_url = result["url"]
+                background_tasks.add_task(start_main_py_background, room_url)
+                result["background_task_started"] = True
+                result["message"] = "Joined existing room and started bot"
+                result["voice_id"] = DEFAULT_VOICE_ID
+                result["ai_name"] = DEFAULT_AI_NAME
+                result["room_name"] = request.room_name
+                return result
+
+        # If room creation was successful, start the background task
+        if response.status_code == 200 and "url" in result:
+            room_url = result["url"]
+            background_tasks.add_task(start_main_py_background, room_url)
+            result["background_task_started"] = True
+            result["message"] = "Room created and bot started"
+            result["expires_in_seconds"] = 300
+            result["expires_at"] = expiry_time
+            result["voice_id"] = DEFAULT_VOICE_ID
+            result["ai_name"] = DEFAULT_AI_NAME
+            result["room_name"] = request.room_name
 
         return result
 
@@ -174,3 +248,9 @@ async def cleanup_process_by_room(room_name: str):
     )
     await cleanup_background_process(room_url)
     return {"message": f"Process cleanup initiated for room: {room_name}"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)

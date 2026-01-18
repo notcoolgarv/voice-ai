@@ -1,31 +1,25 @@
-# Real-time Voicebot with Automatic Room Cleanup
+# Pizza Ordering Voice Bot
 
-This project implements a real-time voicebot using Daily.co for video/audio communication with automatic room cleanup when participants leave.
+This project implements a real-time pizza ordering voicebot using Daily.co for audio communication with automatic room cleanup when participants leave.
 
 ## Features
 
-- **Real-time Voice Communication**: Uses Daily.co for audio/video communication
+- **Real-time Voice Communication**: Uses Daily.co for audio communication
 - **AI-Powered Conversation**: Integrates with OpenAI GPT-4 for natural language processing
 - **Speech-to-Text**: Uses Deepgram for real-time speech recognition
-- **Text-to-Speech**: Uses ElevenLabs for natural voice synthesis with voice selection
-- **Voice Selection**: Choose between male (Matt) and female (Hope) voices
+- **Text-to-Speech**: Uses ElevenLabs for natural voice synthesis
 - **Automatic Room Cleanup**: Automatically deletes rooms and terminates processes when participants leave
-- **CRM Introduction Flow**: Implements a complete Halsell CRM introduction conversation flow
+- **Pizza Ordering Flow**: Complete conversation flow for ordering pizzas with type, size, and toppings selection
+- **Simple Room Creation**: Just enter a room name and start ordering
 
 ## Architecture
 
 ### Components
 
 1. **server.py**: FastAPI server that manages room creation and background processes
-2. **main.py**: Voicebot implementation with conversation flow
-3. **runner.py**: Configuration and setup utilities
-
-### Voice Options
-
-The system supports two voice options for text-to-speech:
-
-- **Female (Hope)**: Voice ID `OYTbf65OHHFELVut7v2H`
-- **Male (Matt)**: Voice ID `pwMBn0SsmN1220Aorv15`
+2. **main.py**: Voicebot implementation with pizza ordering conversation flow
+3. **flow_config.py**: Pizza ordering conversation flow configuration
+4. **index.html**: Web interface for joining rooms and ordering pizza
 
 ### Automatic Cleanup System
 
@@ -47,9 +41,10 @@ The system automatically handles cleanup in the following scenarios:
 ## API Endpoints
 
 ### Room Management
-- `POST /create-room`: Create a new Daily.co room and start voicebot
-  - Request body: `{"voice": "female"}` or `{"voice": "male"}`
-  - Default voice is female if not specified
+- `POST /join-room`: Create/join a room by name and start the voicebot
+  - Request body: `{"room_name": "my-pizza-room"}`
+  - Returns room URL and starts the bot automatically
+- `POST /create-room`: Create a new Daily.co room with random name (legacy)
 - `DELETE /delete-room/{room_name}`: Delete a room and clean up its process
 
 ### Process Management
@@ -58,45 +53,64 @@ The system automatically handles cleanup in the following scenarios:
 
 ## Environment Variables
 
-Required environment variables:
+Required environment variables (create a `.env` file):
 - `DAILY_API_KEY`: Your Daily.co API key
 - `OPENAI_API_KEY`: Your OpenAI API key
 - `DEEPGRAM_API_KEY`: Your Deepgram API key
 - `ELEVENLABS_API_KEY`: Your ElevenLabs API key
-- `DAILY_DOMAIN`: Your Daily.co domain (optional, defaults to 'your-domain.daily.co')
 
-## Usage
+## Quick Start
 
-1. Set up environment variables
-2. Start the server: `python server.py`
-3. Create a room with voice selection:
+1. Copy `.env.example` to `.env` and fill in your API keys
+2. Install dependencies:
    ```bash
-   curl -X POST "http://localhost:8000/create-room" \
-        -H "Content-Type: application/json" \
-        -d '{"voice": "male"}'
+   pip install -r requirements.txt
    ```
-4. Join the room URL in your browser
-5. The voicebot will automatically start with the selected voice and handle the conversation
-6. When you leave, the room and process will be automatically cleaned up
+3. Start the server:
+   ```bash
+   python -m uvicorn src.api.server:app --reload
+   ```
+4. Open http://localhost:8000 in your browser
+5. Enter a room name (e.g., "my-pizza-123")
+6. Click "Start Call" and begin ordering!
 
-## Conversation Flow
+## Usage with API
 
-The voicebot implements a Halsell CRM introduction system with the following states:
-- **greet**: Greeting and name collection
-- **introduce_halsell**: Introduction to Halsell CRM features
-- **features**: Detailed feature explanation
-- **pricing**: Pricing information
-- **contact**: Contact information
-- **sign_up**: Sign-up process
+You can also use the API directly:
+
+```bash
+curl -X POST "http://localhost:8000/join-room" \
+     -H "Content-Type: application/json" \
+     -d '{"room_name": "my-pizza-room"}'
+```
+
+This will return a room URL. Join it in your browser or Daily client to start ordering pizza.
+
+## Pizza Ordering Flow
+
+The voicebot implements a complete pizza ordering system with the following states:
+
+1. **greet**: Welcome message and ask if user wants to order
+2. **choose_pizza_type**: Select pizza type (Margherita, Pepperoni, Vegetarian, Hawaiian, Supreme)
+3. **choose_size**: Select size (Small $10, Medium $15, Large $20)
+4. **choose_toppings**: Add extra toppings ($2 each): cheese, mushrooms, olives, peppers, onions, bacon, sausage
+5. **confirm_order**: Review and confirm the order
+6. **complete_order**: Get order number and estimated time
+
+## User Idle Handling
+
+The bot monitors user activity and:
+- First reminder after 5 seconds of silence
+- Second reminder after another 5 seconds
+- Ends conversation gracefully after third timeout
 
 ## Error Handling
 
 The system includes comprehensive error handling:
 - API failures are logged and handled gracefully
 - Process termination includes fallback mechanisms
-- Network issues are handled with retry logic
-- Invalid room URLs are validated before processing
-- Invalid voice selections are validated and return appropriate error messages
+- Network issues are handled with appropriate error messages
+- Invalid room names are validated before processing
 
 ## Logging
 
@@ -106,4 +120,4 @@ All operations are logged with appropriate levels:
 - WARNING: Non-critical issues
 - ERROR: Critical failures
 
-The system ensures no orphaned resources by automatically cleaning up rooms and processes when participants leave or when the system is terminated. 
+The system ensures no orphaned resources by automatically cleaning up rooms and processes when participants leave or when the system is terminated.

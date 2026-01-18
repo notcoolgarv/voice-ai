@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Food Ordering Bot</title>
+    <title>Pizza Ordering Bot</title>
     <script src="https://unpkg.com/@daily-co/daily-js"></script>
     <style>
         body {
@@ -124,11 +124,11 @@
         <p class="subtitle">Order pizza or sushi using voice commands</p>
 
         <div class="room-input">
-            <input type="text" id="roomUrl" placeholder="Enter Daily room URL" />
+            <input type="text" id="roomName" placeholder="Enter room name (e.g., my-room-123)" />
         </div>
 
         <div class="controls">
-            <button id="joinBtn" onclick="joinCall()">Join Call</button>
+            <button id="joinBtn" onclick="joinCall()">Start Call</button>
             <button id="leaveBtn" onclick="leaveCall()" disabled>Leave Call</button>
             <button id="muteBtn" onclick="toggleMute()" disabled>Mute</button>
             <button id="testAudioBtn" onclick="testAudio()" disabled>Test Audio</button>
@@ -139,18 +139,17 @@
         <div class="instructions">
             <h3>How to use:</h3>
             <ul>
-                <li>First, run the food ordering bot Python script</li>
-                <li>Copy the room URL from the bot's output</li>
-                <li>Paste the room URL above and click "Join Call"</li>
-                <li>Once connected, speak to place your order</li>
-                <li>You can order pizza or sushi - just follow the bot's prompts</li>
+                <li>Enter a room name (e.g., "my-room-123")</li>
+                <li>Click "Start Call" - the bot will automatically start</li>
+                <li>Once connected, speak to interact with the bot</li>
+                <li>The bot will greet you and guide you through the conversation</li>
             </ul>
 
-            <h3>Voice Commands:</h3>
+            <h3>Tips:</h3>
             <ul>
-                <li>"I want pizza" or "I'll take pizza"</li>
-                <li>"I want sushi" or "I'll have sushi"</li>
-                <li>Follow the bot's prompts for size, type, and confirmation</li>
+                <li>Use a unique room name each time</li>
+                <li>Make sure your microphone is enabled</li>
+                <li>Speak clearly when interacting with the bot</li>
             </ul>
         </div>
     </div>
@@ -160,16 +159,42 @@
         let isMuted = false;
 
         async function joinCall() {
-            const roomUrl = document.getElementById('roomUrl').value.trim();
+            const roomName = document.getElementById('roomName').value.trim();
 
-            if (!roomUrl) {
-                alert('Please enter a room URL');
+            if (!roomName) {
+                alert('Please enter a room name');
                 return;
             }
 
             try {
-                updateStatus('Connecting...', 'connecting');
+                updateStatus('Creating room and starting bot...', 'connecting');
                 document.getElementById('joinBtn').disabled = true;
+
+                // Call the API to create/join room
+                const response = await fetch('http://localhost:8000/join-room', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        room_name: roomName
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.error) {
+                    alert('Error: ' + data.error);
+                    updateStatus('Failed to create room', 'disconnected');
+                    document.getElementById('joinBtn').disabled = false;
+                    return;
+                }
+
+                const roomUrl = data.url;
+                console.log('Room URL:', roomUrl);
+                console.log('Bot started:', data.background_task_started);
+
+                updateStatus('Connecting to room...', 'connecting');
 
                 // Create Daily call instance
                 call = DailyIframe.createCallObject();
@@ -324,7 +349,7 @@
                 - Audio inputs available: ${audioInputs.length}
                 - Participants: ${Object.keys(participants).length}
                 - Meeting state: ${meetingState}
-                
+
                 Check browser console for detailed logs.`);
 
             } catch (error) {
@@ -349,8 +374,8 @@
             }
         });
 
-        // Auto-focus room URL input
-        document.getElementById('roomUrl').focus();
+        // Auto-focus room name input
+        document.getElementById('roomName').focus();
     </script>
 </body>
 
