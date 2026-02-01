@@ -115,10 +115,45 @@
         .instructions li {
             margin: 5px 0;
         }
+
+        .audio-prompt {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: #007bff;
+            color: white;
+            padding: 30px 50px;
+            border-radius: 10px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            z-index: 1000;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            animation: pulse 2s infinite;
+            display: none;
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                transform: translate(-50%, -50%) scale(1);
+            }
+            50% {
+                transform: translate(-50%, -50%) scale(1.05);
+            }
+        }
+
+        .audio-prompt:hover {
+            background: #0056b3;
+        }
     </style>
 </head>
 
 <body>
+    <div id="audioPrompt" class="audio-prompt">
+        🔊 Click here to enable audio
+    </div>
+
     <div class="container">
         <h1>🍕 Food Ordering Bot</h1>
         <p class="subtitle">Order pizza or sushi using voice commands</p>
@@ -149,6 +184,7 @@
             <ul>
                 <li>Use a unique room name each time</li>
                 <li>Make sure your microphone is enabled</li>
+                <li>If you don't hear the bot, click anywhere on the page</li>
                 <li>Speak clearly when interacting with the bot</li>
             </ul>
         </div>
@@ -232,53 +268,195 @@
                 });
 
                 call.on('participant-joined', (event) => {
-                    console.log('Participant joined:', event.participant);
+                    console.log('🔵 PARTICIPANT JOINED:', {
+                        sessionId: event.participant.session_id,
+                        userId: event.participant.user_id,
+                        userName: event.participant.user_name,
+                        local: event.participant.local,
+                        owner: event.participant.owner,
+                        tracks: event.participant.tracks
+                    });
                 });
 
                 call.on('participant-left', (event) => {
-                    console.log('Participant left:', event.participant);
+                    console.log('🔴 PARTICIPANT LEFT:', event.participant.session_id);
                 });
 
-                call.on('track-started', (event) => {
-                    console.log('Track started:', event);
+                call.on('track-started', async (event) => {
+                    console.log('🎵 TRACK STARTED:', {
+                        trackKind: event.track.kind,
+                        trackId: event.track.id,
+                        participantId: event.participant.session_id,
+                        isLocal: event.participant.local,
+                        trackState: event.track.readyState,
+                        trackEnabled: event.track.enabled,
+                        trackMuted: event.track.muted
+                    });
+
                     if (event.track.kind === 'audio' && !event.participant.local) {
                         const participantId = event.participant.session_id;
+                        console.log('🔊 Creating audio element for remote participant:', participantId);
+
                         // Remove existing audio element if any
                         const existingAudio = document.getElementById(`audio-${participantId}`);
                         if (existingAudio) {
+                            console.log('🗑️ Removing existing audio element');
                             existingAudio.remove();
                         }
+
                         // Create new audio element
                         const audioElement = document.createElement('audio');
                         audioElement.id = `audio-${participantId}`;
                         audioElement.autoplay = true;
+                        audioElement.playsinline = true;
+                        audioElement.volume = 1.0;
                         audioElement.srcObject = new MediaStream([event.track]);
+
+                        // Add audio element event listeners for debugging
+                        audioElement.addEventListener('loadedmetadata', () => {
+                            console.log('🎼 Audio metadata loaded');
+                        });
+                        audioElement.addEventListener('canplay', () => {
+                            console.log('🎼 Audio can play');
+                        });
+                        audioElement.addEventListener('playing', () => {
+                            console.log('▶️ Audio is PLAYING');
+                        });
+                        audioElement.addEventListener('pause', () => {
+                            console.log('⏸️ Audio paused');
+                        });
+                        audioElement.addEventListener('ended', () => {
+                            console.log('⏹️ Audio ended');
+                        });
+                        audioElement.addEventListener('error', (e) => {
+                            console.error('❌ Audio element error:', e);
+                        });
+                        audioElement.addEventListener('stalled', () => {
+                            console.warn('⚠️ Audio stalled');
+                        });
+                        audioElement.addEventListener('waiting', () => {
+                            console.log('⏳ Audio waiting for data');
+                        });
+
                         document.body.appendChild(audioElement);
-                        console.log('Created audio element for remote participant:', participantId);
+
+                        // Monitor the track state
+                        const mediaStream = audioElement.srcObject;
+                        const audioTrack = mediaStream.getAudioTracks()[0];
+                        console.log('🎤 MediaStream audio track:', {
+                            id: audioTrack.id,
+                            label: audioTrack.label,
+                            enabled: audioTrack.enabled,
+                            muted: audioTrack.muted,
+                            readyState: audioTrack.readyState
+                        });
+
+                        // Listen for track state changes
+                        audioTrack.addEventListener('ended', () => {
+                            console.log('🛑 MediaStreamTrack ended');
+                        });
+                        audioTrack.addEventListener('mute', () => {
+                            console.log('🔇 MediaStreamTrack muted');
+                        });
+                        audioTrack.addEventListener('unmute', () => {
+                            console.log('🔊 MediaStreamTrack unmuted');
+                        });
+
+                        console.log('✅ Audio element created:', {
+                            id: audioElement.id,
+                            autoplay: audioElement.autoplay,
+                            volume: audioElement.volume,
+                            readyState: audioElement.readyState,
+                            paused: audioElement.paused,
+                            muted: audioElement.muted
+                        });
+
+                        // Try to play audio and handle autoplay blocking
+                        try {
+                            await audioElement.play();
+                            console.log('▶️ AUDIO PLAYBACK STARTED SUCCESSFULLY');
+                            updateStatus('Connected - Bot is speaking!', 'connected');
+                        } catch (error) {
+                            console.error('❌ AUTOPLAY BLOCKED:', error);
+                            updateStatus('Click to enable audio!', 'connecting');
+
+                            // Show the audio prompt overlay
+                            const audioPrompt = document.getElementById('audioPrompt');
+                            audioPrompt.style.display = 'block';
+
+                            // Add one-time click handler to start audio
+                            const playAudio = async () => {
+                                try {
+                                    await audioElement.play();
+                                    console.log('▶️ Audio started after user interaction');
+                                    updateStatus('Connected - Speak to place your order!', 'connected');
+                                    audioPrompt.style.display = 'none';
+                                    document.removeEventListener('click', playAudio);
+                                } catch (e) {
+                                    console.error('Failed to play audio:', e);
+                                }
+                            };
+                            document.addEventListener('click', playAudio);
+                        }
                     }
                 });
 
                 call.on('track-stopped', (event) => {
-                    console.log('Track stopped:', event);
+                    console.log('🛑 TRACK STOPPED:', {
+                        trackKind: event.track.kind,
+                        trackId: event.track.id,
+                        participantId: event.participant.session_id,
+                        isLocal: event.participant.local
+                    });
                     if (event.track.kind === 'audio' && !event.participant.local) {
                         const participantId = event.participant.session_id;
                         const audioElement = document.getElementById(`audio-${participantId}`);
                         if (audioElement) {
                             audioElement.srcObject = null;
                             audioElement.remove();
-                            console.log('Removed audio element for remote participant:', participantId);
+                            console.log('🗑️ Removed audio element for remote participant:', participantId);
                         }
                     }
                 });
 
+                // Create a silent audio context to initialize audio (helps with autoplay)
+                try {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext;
+                    const audioContext = new AudioContext();
+                    const oscillator = audioContext.createOscillator();
+                    const gainNode = audioContext.createGain();
+                    gainNode.gain.value = 0.001; // Very quiet
+                    oscillator.connect(gainNode);
+                    gainNode.connect(audioContext.destination);
+                    oscillator.start();
+                    oscillator.stop(audioContext.currentTime + 0.001);
+                    console.log('Audio context initialized');
+                } catch (e) {
+                    console.log('Could not initialize audio context:', e);
+                }
+
                 // Join the call with audio only
+                console.log('📞 Joining call with config:', {
+                    url: roomUrl,
+                    videoSource: false,
+                    audioSource: true,
+                    startAudioOff: false,
+                    startVideoOff: true,
+                    subscribeToTracksAutomatically: true
+                });
+
                 await call.join({
                     url: roomUrl,
                     videoSource: false, // No video
                     audioSource: true,  // Enable audio input
                     startAudioOff: false, // Start with audio on
-                    startVideoOff: true   // Ensure video is off
+                    startVideoOff: true,   // Ensure video is off
+                    subscribeToTracksAutomatically: true  // CRITICAL: Auto-subscribe to bot's audio tracks
                 });
+
+                console.log('✅ CALL JOINED SUCCESSFULLY');
+                console.log('📊 Call participants:', call.participants());
+                console.log('📊 Local participant:', call.participants().local);
 
             } catch (error) {
                 console.error('Failed to join call:', error);

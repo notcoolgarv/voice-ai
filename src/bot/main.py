@@ -3,25 +3,26 @@ import os
 import sys
 import signal
 import argparse
-from pathlib import Path
 
 import aiohttp
 import httpx
 from dotenv import load_dotenv
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.audio.vad.vad_analyzer import VADParams
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.pipeline.task import PipelineParams, PipelineTask
-from pipecat.processors.aggregators.openai_llm_context import OpenAILLMContext
+from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.processors.aggregators.llm_response_universal import LLMContextAggregatorPair
 from pipecat.processors.user_idle_processor import UserIdleProcessor
-from pipecat.frames.frames import EndFrame, LLMMessagesFrame, TTSSpeakFrame
-from pipecat.services.elevenlabs.tts import ElevenLabsTTSService
+from pipecat.frames.frames import EndFrame, TTSSpeakFrame
+from pipecat.services.cartesia.tts import CartesiaTTSService
 from pipecat.services.deepgram.stt import DeepgramSTTService
 from pipecat.services.openai.llm import OpenAILLMService
-from pipecat.transports.services.daily import DailyParams, DailyTransport
+from pipecat.transports.daily.transport import DailyParams, DailyTransport
 
-from pipecat_flows import FlowConfig, FlowManager, FlowResult
+from pipecat_flows import FlowConfig, FlowManager
 
 from flow_config import create_flow_config
 
@@ -34,9 +35,10 @@ logger.add(sys.stderr, level="DEBUG")
 room_url: str | None = None
 current_process_pid: int | None = None
 
-# Default voice - Hope (popular ElevenLabs voice)
-DEFAULT_VOICE_ID = "OYTbf65OHHFELVut7v2H"
+# Default values
 DEFAULT_AI_NAME = "Pizza ordering AI"
+# Cartesia voice - British Reading Lady
+DEFAULT_VOICE_ID = "820a3788-2b37-4d21-847a-b65d8a68c99a"
 
 
 async def delete_room(room_url: str | None):
@@ -109,8 +111,8 @@ async def main():
 
     args = parser.parse_args()
 
-    # Use default voice and AI name
-    voice_id = DEFAULT_VOICE_ID
+    # Get voice ID from environment or use default
+    voice_id = os.getenv("CARTESIA_VOICE_ID") or DEFAULT_VOICE_ID
     ai_name = DEFAULT_AI_NAME
     logger.info(f"Using AI name: {ai_name} with voice ID: {voice_id}")
 
@@ -139,6 +141,7 @@ async def main():
             logger.error("No room URL provided")
             return
 
+        logger.info("🎙️ Initializing DailyTransport...")
         transport = DailyTransport(
             room_url,
             None,
@@ -146,21 +149,30 @@ async def main():
             DailyParams(
                 audio_in_enabled=True,
                 audio_out_enabled=True,
-                vad_analyzer=SileroVADAnalyzer(),
+                vad_analyzer=SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
             ),
         )
+        logger.info(f"✅ DailyTransport initialized for room: {room_url}")
 
+        logger.info("🎤 Initializing STT service (Deepgram)...")
         stt = DeepgramSTTService(api_key=os.getenv("DEEPGRAM_API_KEY") or "")
-        tts = ElevenLabsTTSService(
-            api_key=os.getenv("ELEVENLABS_API_KEY") or "",
+        logger.info("✅ STT service initialized")
+
+        logger.info(f"🔊 Initializing TTS service (Cartesia) with voice_id: {voice_id}...")
+        tts = CartesiaTTSService(
+            api_key=os.getenv("CARTESIA_API_KEY") or "",
             voice_id=voice_id,
         )
+        logger.info("✅ TTS service initialized")
+
+        logger.info("🤖 Initializing LLM service (OpenAI GPT-4o)...")
         llm = OpenAILLMService(
             api_key=os.getenv("OPENAI_API_KEY") or "", model="gpt-4o"
         )
+        logger.info("✅ LLM service initialized")
 
-        context = OpenAILLMContext()
-        context_aggregator = llm.create_context_aggregator(context)
+        context = LLMContext()
+        context_aggregator = LLMContextAggregatorPair(context)
 
         async def handle_user_idle(
             user_idle: UserIdleProcessor, retry_count: int
@@ -176,9 +188,7 @@ async def main():
             elif retry_count == 2:
                 # Second attempt: More direct prompt
                 await user_idle.push_frame(
-                    TTSSpeakFrame(
-                        "Hello? Would you still like to order a pizza?"
-                    )
+                    TTSSpeakFrame("Hello? Would you still like to order a pizza?")
                 )
                 return True
             else:
@@ -213,23 +223,37 @@ async def main():
             llm=llm,
             context_aggregator=context_aggregator,
             flow_config=dynamic_flow_config,
+            transport=transport,
         )
 
         @transport.event_handler("on_first_participant_joined")
         async def on_first_participant_joined(transport, participant):
             await transport.capture_participant_transcription(participant["id"])
-            logger.debug("Initializing flow")
             await flow_manager.initialize()
+
+        @transport.event_handler("on_app_message")
+        async def on_app_message(transport, message, sender):
+            logger.info(f"📨 APP MESSAGE from {sender}: {message}")
+
+        @transport.event_handler("on_call_state_updated")
+        async def on_call_state_updated(transport, state):
+            logger.info(f"📞 CALL STATE UPDATED: {state}")
+
+        @transport.event_handler("on_participant_joined")
+        async def on_participant_joined(transport, participant):
+            logger.info(f"👥 PARTICIPANT JOINED (any): {participant['id']}")
 
         @transport.event_handler("on_participant_left")
         async def on_participant_left(transport, participant, *args):
-            logger.info(f"Participant left: {participant['id']}")
-            logger.info("Deleting room and terminating process...")
+            logger.info(f"🔴 PARTICIPANT LEFT: {participant['id']}")
+            logger.info("🗑️ Deleting room and terminating process...")
             await delete_room(room_url)
             kill_current_process()
 
+        logger.info("🚀 Starting pipeline runner...")
         runner = PipelineRunner()
         await runner.run(task)
+        logger.info("Pipeline runner completed")
 
 
 if __name__ == "__main__":

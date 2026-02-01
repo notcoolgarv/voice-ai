@@ -34,7 +34,7 @@ app.add_middleware(
 background_processes = {}
 
 # Default voice - Hope (popular ElevenLabs voice)
-DEFAULT_VOICE_ID = "OYTbf65OHHFELVut7v2H"
+DEFAULT_VOICE_ID = "EST9Ui6982FZPSi7gCHi"
 DEFAULT_AI_NAME = "Pizza ordering AI"
 
 
@@ -52,15 +52,11 @@ async def start_main_py_background(room_url: str):
         # Get the directory where main.py is located
         main_py_path = Path(__file__).parent.parent / "bot" / "main.py"
 
-        logger.info(
-            f"Starting main.py background process with room URL: {room_url}"
-        )
+        logger.info(f"Starting main.py background process with room URL: {room_url}")
 
         # Start main.py as a subprocess with the room URL
         # Remove stdout and stderr pipes to see logs in real-time
-        process = subprocess.Popen(
-            [sys.executable, str(main_py_path), "-u", room_url]
-        )
+        process = subprocess.Popen([sys.executable, str(main_py_path), "-u", room_url])
 
         logger.info(f"Started main.py background process with PID: {process.pid}")
 
